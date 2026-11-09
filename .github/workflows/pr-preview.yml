@@ -1,9 +1,7 @@
-# Stage 1 of the PR preview: render the site with a read-only token.
-#
-# Runs on pull_request, so it works for PRs from forks, but GitHub gives
-# fork PRs a read-only GITHUB_TOKEN. This workflow therefore only builds
-# and uploads the rendered site; pr-preview-deploy.yml (triggered by
-# workflow_run, running trusted code from main) pushes it to gh-pages.
+# Render every PR so broken builds show up as a failing check, but only
+# deploy previews for branches in this repository. PRs from forks get a
+# read-only token, and we do not publish content from outside the repo
+# to the Pages site.
 name: PR Preview
 
 on:
@@ -12,48 +10,46 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 concurrency:
   group: pr-preview-${{ github.event.number }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-preview:
     runs-on: ubuntu-latest
+    if: github.event.action != 'closed'
     steps:
       - uses: actions/checkout@v7
-        if: github.event.action != 'closed'
 
       - name: Set up Quarto
-        if: github.event.action != 'closed'
         uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Render site
-        if: github.event.action != 'closed'
         run: quarto render
 
-      - name: Record PR number and action
-        run: |
-          mkdir -p _preview-meta
-          echo "${{ github.event.number }}" > _preview-meta/pr-number
-          if [ "${{ github.event.action }}" = "closed" ]; then
-            echo remove > _preview-meta/action
-          else
-            echo deploy > _preview-meta/action
-          fi
-
-      - name: Upload preview metadata
-        uses: actions/upload-artifact@v7
+      - name: Deploy preview
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: rossjrw/pr-preview-action@v1
         with:
-          name: preview-meta
-          path: _preview-meta/
-          retention-days: 1
+          source-dir: _site
+          preview-branch: gh-pages
+          umbrella-dir: pr-preview
 
-      - name: Upload rendered site
-        if: github.event.action != 'closed'
-        uses: actions/upload-artifact@v7
+      - name: Note skipped preview for forks
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: echo "::notice::Site rendered successfully. Previews are not deployed for pull requests from forks."
+
+  cleanup-preview:
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Remove preview
+        uses: rossjrw/pr-preview-action@v1
         with:
-          name: site
-          path: _site/
-          retention-days: 1
+          preview-branch: gh-pages
+          umbrella-dir: pr-preview
