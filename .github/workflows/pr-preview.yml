@@ -9,9 +9,7 @@ on:
     types: [opened, synchronize, reopened, closed]
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: pr-preview-${{ github.event.number }}
@@ -21,18 +19,23 @@ jobs:
   build-and-preview:
     runs-on: ubuntu-latest
     if: github.event.action != 'closed'
+    permissions:
+      contents: write # push the preview to gh-pages
+      pull-requests: write # sticky comment with the preview link
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Quarto
-        uses: quarto-dev/quarto-actions/setup@v2
+        uses: quarto-dev/quarto-actions/setup@8a96df13519ee81fd526f2dfca5962811136661b # v2.2.0
 
       - name: Render site
         run: quarto render
 
       - name: Deploy preview
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: rossjrw/pr-preview-action@v1
+        uses: rossjrw/pr-preview-action@873417d2df72380da1f3978378fb58560bcde976 # v1.8.2
         with:
           source-dir: _site
           preview-branch: gh-pages
@@ -45,11 +48,16 @@ jobs:
   cleanup-preview:
     runs-on: ubuntu-latest
     if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write # remove the preview from gh-pages
+      pull-requests: write # update the sticky comment
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Remove preview
-        uses: rossjrw/pr-preview-action@v1
+        uses: rossjrw/pr-preview-action@873417d2df72380da1f3978378fb58560bcde976 # v1.8.2
         with:
           preview-branch: gh-pages
           umbrella-dir: pr-preview
