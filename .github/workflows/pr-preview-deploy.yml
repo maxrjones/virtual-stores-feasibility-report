@@ -1,0 +1,81 @@
+# Stage 2 of the PR preview: publish what pr-preview.yml rendered.
+#
+# workflow_run always runs the copy of this file on the default branch with
+# a write token, even when the PR came from a fork. It never checks out or
+# executes PR code; it only copies the uploaded static files to gh-pages.
+# Everything read from the artifacts is treated as untrusted input.
+name: PR Preview Deploy
+
+on:
+  workflow_run:
+    workflows: [PR Preview]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    concurrency:
+      group: pr-preview-deploy
+      cancel-in-progress: false
+    steps:
+      # The preview action pushes from a git repository at the workspace
+      # root. Check out main (trusted code) first so checkout's clean step
+      # cannot delete the artifacts downloaded below.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download preview metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: preview-meta
+          path: _preview-meta
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Read and validate metadata
+        id: meta
+        run: |
+          pr="$(head -c 16 _preview-meta/pr-number | tr -d '[:space:]')"
+          action="$(head -c 16 _preview-meta/action | tr -d '[:space:]')"
+          [[ "$pr" =~ ^[0-9]+$ ]] || { echo "Invalid PR number"; exit 1; }
+          [[ "$action" == deploy || "$action" == remove ]] || { echo "Invalid action"; exit 1; }
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+
+      - name: Download rendered site
+        if: steps.meta.outputs.action == 'deploy'
+        uses: actions/download-artifact@v8
+        with:
+          name: site
+          path: _site
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Deploy or remove preview
+        id: preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          action: ${{ steps.meta.outputs.action }}
+          pr-number: ${{ steps.meta.outputs.pr }}
+          source-dir: _site
+          preview-branch: gh-pages
+          umbrella-dir: pr-preview
+          comment: false
+          deploy-commit-message: Deploy preview for PR ${{ steps.meta.outputs.pr }}
+          remove-commit-message: Remove preview for PR ${{ steps.meta.outputs.pr }}
+
+      - name: Comment with preview link
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-preview
+          number: ${{ steps.meta.outputs.pr }}
+          message: |
+            ${{ steps.meta.outputs.action == 'deploy' && format('Preview: {0}', steps.preview.outputs.preview-url) || 'Preview removed.' }}
+
+            Built from ${{ github.event.workflow_run.head_sha }}.

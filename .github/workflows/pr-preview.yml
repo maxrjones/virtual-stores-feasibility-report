@@ -1,3 +1,9 @@
+# Stage 1 of the PR preview: render the site with a read-only token.
+#
+# Runs on pull_request, so it works for PRs from forks, but GitHub gives
+# fork PRs a read-only GITHUB_TOKEN. This workflow therefore only builds
+# and uploads the rendered site; pr-preview-deploy.yml (triggered by
+# workflow_run, running trusted code from main) pushes it to gh-pages.
 name: PR Preview
 
 on:
@@ -6,40 +12,48 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: pr-preview-${{ github.event.number }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-preview:
+  build:
     runs-on: ubuntu-latest
-    if: github.event.action != 'closed'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        if: github.event.action != 'closed'
 
       - name: Set up Quarto
+        if: github.event.action != 'closed'
         uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Render site
+        if: github.event.action != 'closed'
         run: quarto render
 
-      - name: Deploy preview
-        uses: rossjrw/pr-preview-action@v1
-        with:
-          source-dir: _site
-          preview-branch: gh-pages
-          umbrella-dir: pr-preview
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Record PR number and action
+        run: |
+          mkdir -p _preview-meta
+          echo "${{ github.event.number }}" > _preview-meta/pr-number
+          if [ "${{ github.event.action }}" = "closed" ]; then
+            echo remove > _preview-meta/action
+          else
+            echo deploy > _preview-meta/action
+          fi
 
-  cleanup-preview:
-    runs-on: ubuntu-latest
-    if: github.event.action == 'closed'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Remove preview
-        uses: rossjrw/pr-preview-action@v1
+      - name: Upload preview metadata
+        uses: actions/upload-artifact@v7
         with:
-          source-dir: _site
-          preview-branch: gh-pages
-          umbrella-dir: pr-preview
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: preview-meta
+          path: _preview-meta/
+          retention-days: 1
+
+      - name: Upload rendered site
+        if: github.event.action != 'closed'
+        uses: actions/upload-artifact@v7
+        with:
+          name: site
+          path: _site/
+          retention-days: 1
